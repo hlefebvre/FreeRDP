@@ -1,5 +1,5 @@
 
-find_path(GSM_INCLUDE_DIR gsm/gsm.h)
+find_path(GSM_INCLUDE_DIR gsm.h)
 
 find_library(GSM_LIBRARY gsm)
 

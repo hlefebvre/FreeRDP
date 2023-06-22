@@ -32,7 +32,7 @@
 
 #if !defined(WITH_DSP_FFMPEG)
 #if defined(WITH_GSM)
-#include <gsm/gsm.h>
+#include <gsm.h>
 #endif
 
 #if defined(WITH_LAME)

@@ -90,6 +90,7 @@ struct rdp_transport
 	rdpTransportIo io;
 	HANDLE ioEvent;
 	BOOL useIoEvent;
+	BOOL earlyUserAuth;
 };
 
 static void transport_ssl_cb(SSL* ssl, int where, int ret)
@@ -321,6 +322,57 @@ static BOOL transport_default_connect_tls(rdpTransport* transport)
 	}
 
 	return TRUE;
+}
+
+BOOL transport_connect_nla_ext(rdpTransport* transport)
+{
+	rdpContext* context = NULL;
+	rdpSettings* settings = NULL;
+	rdpRdp* rdp = NULL;
+	if (!transport)
+		return FALSE;
+
+	context = transport_get_context(transport);
+	WINPR_ASSERT(context);
+
+	settings = context->settings;
+	WINPR_ASSERT(settings);
+
+	rdp = context->rdp;
+	WINPR_ASSERT(rdp);
+
+	if (!transport_connect_tls(transport))
+		return FALSE;
+
+	if (!settings->Authentication)
+		return TRUE;
+
+	nla_free(rdp->nla);
+	rdp->nla = nla_new(context, transport);
+	if (!rdp->nla)
+		return FALSE;
+
+	nla_set_early_user_auth(rdp->nla, TRUE);
+	transport_set_nla_mode(transport, TRUE);
+
+	if (settings->AuthenticationServiceClass)
+	{
+		if (!nla_set_service_principal(rdp->nla, settings->AuthenticationServiceClass,
+		                               freerdp_settings_get_server_name(settings)))
+			return FALSE;
+	}
+
+	if (nla_client_begin(rdp->nla) < 0)
+	{
+		WLog_Print(transport->log, WLOG_ERROR, "NLA begin failed");
+
+		freerdp_set_last_error_if_not(context, FREERDP_ERROR_AUTHENTICATION_FAILED);
+
+		transport_set_nla_mode(transport, FALSE);
+		return FALSE;
+	}
+
+	return rdp_client_transition_to_state(rdp, CONNECTION_STATE_NLA);
 }
 
 BOOL transport_connect_nla(rdpTransport* transport)
@@ -1028,6 +1080,14 @@ static int transport_default_read_pdu(rdpTransport* transport, wStream* s)
 			Stream_Write_UINT8(s, c);
 		} while (c != '\0');
 	}
+	else if (transport->earlyUserAuth)
+	{
+    if (!Stream_EnsureCapacity(s, 4))
+    	return -1;
+    const int rc = transport_read_layer_bytes(transport, s, 4);
+    if (rc != 1)
+      return rc;
+  }
 	else
 	{
 		/* Read in pdu length */
@@ -1530,6 +1590,7 @@ rdpTransport* transport_new(rdpContext* context)
 	transport->blocking = TRUE;
 	transport->GatewayEnabled = FALSE;
 	transport->layer = TRANSPORT_LAYER_TCP;
+	transport->earlyUserAuth = FALSE;
 
 	if (!InitializeCriticalSectionAndSpinCount(&(transport->ReadLock), 4000))
 		goto fail;
@@ -1723,3 +1784,12 @@ BOOL transport_io_callback_set_event(rdpTransport* transport, BOOL set)
 		return ResetEvent(transport->ioEvent);
 	return SetEvent(transport->ioEvent);
 }
+
+void transport_set_early_user_auth_mode(rdpTransport* transport, BOOL EUAMode)
+{
+	WINPR_ASSERT(transport);
+	transport->earlyUserAuth = EUAMode;
+	WLog_Print(transport->log, WLOG_DEBUG, "Early User Auth Mode: %s", EUAMode ? "on" : "off");
+}
+
+
